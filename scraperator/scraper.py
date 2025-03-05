@@ -5,12 +5,12 @@ import time
 from functools import cached_property
 from bs4 import BeautifulSoup
 
-from base_scraper import BaseScraper
-from request_scraper import RequestScraper
-from playwright_scraper import PlaywrightScraper
+from .base_scraper import BaseScraper
+from .request_scraper import RequestScraper
+from .playwright_scraper import PlaywrightScraper
 from cacherator import JSONCache, Cached
 from logorator import Logger
-from markdown_converter import MarkdownConverter
+from .markdown_converter import MarkdownConverter
 
 
 class Scraper(JSONCache):

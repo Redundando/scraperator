@@ -1,10 +1,10 @@
-from scraper import Scraper
+from scraperator.scraper import Scraper
 import time
 
 
 def example_basic_usage():
     print("Creating scraper for example.com...")
-    scraper = Scraper(url="https://www.kicker.de", method="playwright")
+    scraper = Scraper(url="https://de.wikipedia.org/wiki/Demian", method="playwright")
 
     # First fetch - will get fresh content
     print("First fetch (should scrape from source):")

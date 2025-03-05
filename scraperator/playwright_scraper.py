@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any, Literal, Tuple, List
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, Playwright, TimeoutError as PlaywrightTimeoutError
 import time
 
-from base_scraper import BaseScraper
+from .base_scraper import BaseScraper
 from logorator import Logger
 
 

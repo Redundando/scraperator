@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scraperator"
-version = "0.0.1"
+version = "0.0.2"
 description = "A flexible web scraping toolkit with caching capabilities"
 readme = "README.md"
 authors = [
@@ -33,9 +33,9 @@ dependencies = [
 ]
 
 [project.urls]
-homepage = "https://github.com/yourusername/scraperator"
-repository = "https://github.com/yourusername/scraperator"
-documentation = "https://github.com/yourusername/scraperator#readme"
+homepage = "https://github.com/Redundando/scraperator"
+repository = "https://github.com/Redundando/scraperator"
+documentation = "https://github.com/Redundando/scraperator#readme"
 
 [project.optional-dependencies]
 dev = [
@@ -61,3 +61,6 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+
+[tool.setuptools.packages.find]
+exclude = ["cache"]

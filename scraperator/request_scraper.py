@@ -3,7 +3,7 @@ import requests
 import time
 from requests.exceptions import RequestException
 
-from base_scraper import BaseScraper
+from .base_scraper import BaseScraper
 from logorator import Logger
 
 
