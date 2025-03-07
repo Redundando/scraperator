@@ -4,6 +4,7 @@ import time
 
 from .base_scraper import BaseScraper
 from logorator import Logger
+from .browser_installer import install_browser
 
 
 class PlaywrightScraper(BaseScraper):
@@ -35,6 +36,9 @@ class PlaywrightScraper(BaseScraper):
         self.last_status_code: int = 200
 
     def _ensure_browser(self) -> None:
+        """
+        Ensures a browser instance is available, installing it if needed.
+        """
         if self._playwright is None:
             self._playwright = sync_playwright().start()
 
@@ -47,10 +51,32 @@ class PlaywrightScraper(BaseScraper):
             else:
                 raise ValueError(f"Unknown browser type: {self.browser_type}")
 
-            self._browser = browser_launcher.launch(
-                    headless=self.headless,
-                    **self.browser_args
-            )
+            try:
+                # Try to launch the browser
+                self._browser = browser_launcher.launch(
+                        headless=self.headless,
+                        **self.browser_args
+                )
+            except Exception as e:
+                # Check if the error is because the browser is not installed
+                error_str = str(e).lower()
+                if "executable not found" in error_str or "browser is not installed" in error_str:
+                    Logger.note(f"PlaywrightScraper: Browser {self.browser_type} not found. Attempting to install...")
+
+                    # Try to install the browser
+                    if install_browser(self.browser_type):
+                        # Try launching again
+                        self._browser = browser_launcher.launch(
+                                headless=self.headless,
+                                **self.browser_args
+                        )
+                    else:
+                        raise RuntimeError(
+                                f"Failed to install {self.browser_type} browser. Please run 'playwright install {self.browser_type}' manually."
+                        ) from e
+                else:
+                    # If it's not a missing browser issue, re-raise the original error
+                    raise
 
             self._context = self._browser.new_context(**self.context_args)
 
