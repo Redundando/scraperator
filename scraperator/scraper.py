@@ -17,7 +17,8 @@ class Scraper(JSONCache):
     def __init__(self,
                  url: str,
                  method: str = "requests",
-                 cache_ttl: int = 1,
+                 cache_ttl: int = 7,
+                 clear_cache: bool = False,
                  cache_directory: Optional[str] = None,
                  cache_id: Optional[str] = None,
                  browser_type: Literal["chromium", "firefox", "webkit"] = "chromium",
@@ -67,6 +68,7 @@ class Scraper(JSONCache):
                 data_id=cache_id,
                 directory=self.cache_directory,
                 ttl=cache_ttl,
+                clear_cache=clear_cache,
                 logging=True
         )
 
