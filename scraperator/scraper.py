@@ -29,7 +29,7 @@ class Scraper(JSONCache):
                  **kwargs: Any):
 
         self.url: str = url
-        self.cache_directory = cache_directory if cache_directory else f"cache/scraper/{method}"
+        self.cache_directory = cache_directory if cache_directory else f"data/scraper/{method}"
         self._executor: Optional[ThreadPoolExecutor] = None
         self._future: Optional[Future] = None
         self._soup_instance: Optional[BeautifulSoup] = None
