@@ -2,7 +2,7 @@
 Package: ghostscraper
 Version: 0.9.5
 Source: https://pypi.org/project/ghostscraper/
-Fetched: 2026-03-23 10:49:54
+Fetched: 2026-03-23 16:22:31
 ---
 
 # Ghostscraper

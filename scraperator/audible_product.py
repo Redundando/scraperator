@@ -4,11 +4,10 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 from bs4 import BeautifulSoup
+from logorator import Logger
 
 from .scraped_model import ScrapedModel, ScrapedModelConfig
-from .types import LinkedEntity, ProductIdentity
-
-ProductInput = tuple[str, str]  # (tld, asin)
+from .types import LinkedEntity, ProductIdentity, ProductInput
 
 
 @dataclass
@@ -80,9 +79,7 @@ class AudibleProduct(ScrapedModel):
         tld: str | None = None,
         asin: str | None = None,
         url: str | None = None,
-        dynamodb_table: str | None = None,
         on_progress: Callable | None = None,
-        use_cache: bool = True,
     ):
         if url:
             parsed = AudibleProduct.parse_url(url)
@@ -92,11 +89,14 @@ class AudibleProduct(ScrapedModel):
         self.tld = tld
         self.asin = asin.upper()
         self._url = f"https://www.audible.{tld}/pd/{asin}"
-        super().__init__(dynamodb_table=dynamodb_table, on_progress=on_progress, use_cache=use_cache)
+        super().__init__(on_progress=on_progress)
+
+    def __str__(self) -> str:
+        return f"AudibleProduct({self.tld}, {self.asin})"
 
     @property
     def cache_key(self) -> str:
-        return f"{self.tld}_{self.asin}"
+        return f"audible_product_{self.tld}_{self.asin}"
 
     @property
     def url(self) -> str:
@@ -108,9 +108,9 @@ class AudibleProduct(ScrapedModel):
         return f"{self._url}?{params}" if params else self._url
 
     @classmethod
-    def _from_input(cls, item: ProductInput, dynamodb_table: str = None, use_cache: bool = True) -> "AudibleProduct":
+    def _from_input(cls, item: ProductInput) -> "AudibleProduct":
         tld, asin = item
-        return cls(tld, asin, dynamodb_table=dynamodb_table, use_cache=use_cache)
+        return cls(tld, asin)
 
     # === Properties ===
 
@@ -325,6 +325,7 @@ class AudibleProduct(ScrapedModel):
             {"name": c.text.strip(), "url": self._clean_url(c.get("href"))} for c in container.find_all("adbl-chip")
         ]
 
+    @Logger(exclude_args=["self"])
     async def _parse_html(self, html: str, scraper=None) -> AudibleProductData:
         soup = BeautifulSoup(html, "html.parser")
         json_scripts = self._get_json_scripts(soup)
@@ -357,21 +358,15 @@ class AudibleProduct(ScrapedModel):
         cls,
         products: list[ProductInput],
         max_concurrent: int | None = None,
-        dynamodb_table: str | None = None,
-        scrape_dynamodb_table: str | None = None,
         on_progress: Callable | None = None,
         clear_cache: bool = False,
-        save_cache: bool = True,
         upload_images: bool = True,
     ) -> list["AudibleProduct"]:
         return await super().scrape_many(
             items=products,
             max_concurrent=max_concurrent,
-            dynamodb_table=dynamodb_table,
-            scrape_dynamodb_table=scrape_dynamodb_table,
             on_progress=on_progress,
             clear_cache=clear_cache,
-            save_cache=save_cache,
             upload_images=upload_images,
         )
 
@@ -379,8 +374,6 @@ class AudibleProduct(ScrapedModel):
     def scrape_stream(
         cls,
         products: list[ProductInput],
-        dynamodb_table: str | None = None,
-        scrape_dynamodb_table: str | None = None,
         subprocess_batch_size: int | None = None,
         max_concurrent: int | None = None,
         on_progress: Callable | None = None,
@@ -389,8 +382,6 @@ class AudibleProduct(ScrapedModel):
     ) -> AsyncGenerator["AudibleProduct", None]:
         return super().scrape_stream(
             items=products,
-            dynamodb_table=dynamodb_table,
-            scrape_dynamodb_table=scrape_dynamodb_table,
             subprocess_batch_size=subprocess_batch_size,
             max_concurrent=max_concurrent,
             on_progress=on_progress,

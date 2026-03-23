@@ -1,14 +1,21 @@
 from .scraped_model import ScrapedModel, ScrapedModelConfig
-from .types import AuthorIdentity, LinkedEntity, ProductIdentity
+from .types import AuthorIdentity, AuthorInput, LinkedEntity, ProductIdentity, ProductInput
 
-from .audible_product import AudibleProduct, AudibleProductConfig, ProductInput
-from .audible_author import AudibleAuthor, AudibleAuthorConfig, AuthorInput
+import logging
+_logger = logging.getLogger(__name__)
 
-# amazon extra — requires boto3, httpx, Pillow
+# audible extra — requires beautifulsoup4
+try:
+    from .audible_product import AudibleProduct, AudibleProductConfig
+    from .audible_author import AudibleAuthor, AudibleAuthorConfig
+except ImportError:
+    _logger.debug("Audible extras not available", exc_info=True)
+
+# amazon extra — requires beautifulsoup4, boto3, httpx, Pillow
 try:
     from .amazon_author import AmazonAuthor, AmazonAuthorConfig
 except ImportError:
-    pass
+    _logger.debug("Amazon extras not available", exc_info=True)
 
 __all__ = [
     "ScrapedModel",

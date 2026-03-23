@@ -1,15 +1,12 @@
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Optional
-
 from bs4 import BeautifulSoup
+from logorator import Logger
 
 from .scraped_model import ScrapedModel, ScrapedModelConfig
-from .types import AuthorIdentity
-
-AuthorInput = tuple[str, str]  # (tld, author_id)
+from .types import AuthorIdentity, AuthorInput
 
 
 @dataclass
@@ -37,9 +34,7 @@ class AmazonAuthor(ScrapedModel):
         tld: str | None = None,
         author_id: str | None = None,
         url: str | None = None,
-        dynamodb_table: str | None = None,
         on_progress: Callable | None = None,
-        use_cache: bool = True,
     ):
         if url:
             parsed = AmazonAuthor.parse_url(url)
@@ -49,33 +44,36 @@ class AmazonAuthor(ScrapedModel):
         self.tld = tld
         self.author_id = author_id
         self._url = url or f"https://www.amazon.{tld}/stores/author/{author_id}"
-        super().__init__(dynamodb_table=dynamodb_table, on_progress=on_progress, use_cache=use_cache)
+        super().__init__(on_progress=on_progress)
+
+    def __str__(self) -> str:
+        return f"AmazonAuthor({self.tld}, {self.author_id})"
 
     @property
     def cache_key(self) -> str:
-        return f"{self.tld}_{self.author_id}"
+        return f"amazon_author_{self.tld}_{self.author_id}"
 
     @property
     def url(self) -> str:
         return self._url
 
     @classmethod
-    def _from_input(cls, item: AuthorInput, dynamodb_table: str = None, use_cache: bool = True) -> "AmazonAuthor":
+    def _from_input(cls, item: AuthorInput) -> "AmazonAuthor":
         tld, author_id = item
-        return cls(tld, author_id, dynamodb_table=dynamodb_table, use_cache=use_cache)
+        return cls(tld, author_id)
 
     # === Properties ===
 
     @property
-    def name(self) -> Optional[str]:
+    def name(self) -> str | None:
         return self.data.get("name")
 
     @property
-    def image_url(self) -> Optional[str]:
+    def image_url(self) -> str | None:
         return self.data.get("image_url")
 
     @property
-    def image_s3_key(self) -> Optional[str]:
+    def image_s3_key(self) -> str | None:
         return self.data.get("image_s3_key")
 
     async def is_placeholder_image(self) -> bool:
@@ -83,13 +81,14 @@ class AmazonAuthor(ScrapedModel):
             return False
         return await asyncio.to_thread(self._compare_to_placeholder)
 
+    @Logger(exclude_args=["self"])
     def _compare_to_placeholder(self) -> bool:
-        import boto3
         from PIL import Image
         import io
         import statistics
+        from .scraped_model import _s3_client
 
-        s3 = boto3.client("s3")
+        s3 = _s3_client()
 
         def _fetch(key: str) -> Image.Image:
             buf = io.BytesIO()
@@ -107,35 +106,9 @@ class AmazonAuthor(ScrapedModel):
     def _identity_dict(self) -> AuthorIdentity:
         return {"author_id": self.author_id, "tld": self.tld}
 
-    # === Image Upload ===
-
-    async def _maybe_upload_images(self, upload_images: bool) -> None:
-        if upload_images and self.config.s3_bucket and self.data.get("image_url") and not self.data.get("image_s3_key"):
-            self.data["image_s3_key"] = await self._upload_image_to_s3(self.data["image_url"])
-
-    async def _upload_image_to_s3(self, image_url: str) -> Optional[str]:
-        try:
-            import boto3
-            import httpx
-
-            response = await asyncio.to_thread(httpx.get, image_url, follow_redirects=True)
-            response.raise_for_status()
-            ext = image_url.split("?")[0].rsplit(".", 1)[-1] or "jpg"
-            key = f"{self.config.s3_prefix}{self.cache_key}.{ext}"
-            s3 = boto3.client("s3")
-            await asyncio.to_thread(
-                s3.put_object,
-                Bucket=self.config.s3_bucket,
-                Key=key,
-                Body=response.content,
-                ContentType=response.headers.get("content-type", "image/jpeg"),
-            )
-            return key
-        except Exception:
-            return None
-
     # === Parsing ===
 
+    @Logger(exclude_args=["self"])
     async def _parse_html(self, html: str, scraper=None) -> dict:
         soup = BeautifulSoup(html, "html.parser")
         return {
@@ -143,11 +116,11 @@ class AmazonAuthor(ScrapedModel):
             "image_url": self._extract_image_url(soup),
         }
 
-    def _extract_name(self, soup) -> Optional[str]:
+    def _extract_name(self, soup) -> str | None:
         el = soup.find("h1")
         return el.text.strip() if el else None
 
-    def _extract_image_url(self, soup) -> Optional[str]:
+    def _extract_image_url(self, soup) -> str | None:
         og = soup.find("meta", property="og:image")
         if og and og.get("content"):
             return og["content"]
@@ -160,20 +133,33 @@ class AmazonAuthor(ScrapedModel):
         cls,
         authors: list[AuthorInput],
         max_concurrent: int | None = None,
-        dynamodb_table: str | None = None,
-        scrape_dynamodb_table: str | None = None,
         on_progress: Callable | None = None,
         clear_cache: bool = False,
-        save_cache: bool = True,
         upload_images: bool = True,
     ) -> list["AmazonAuthor"]:
         return await super().scrape_many(
             items=authors,
             max_concurrent=max_concurrent,
-            dynamodb_table=dynamodb_table,
-            scrape_dynamodb_table=scrape_dynamodb_table,
             on_progress=on_progress,
             clear_cache=clear_cache,
-            save_cache=save_cache,
+            upload_images=upload_images,
+        )
+
+    @classmethod
+    def scrape_stream(
+        cls,
+        authors: list[AuthorInput],
+        subprocess_batch_size: int | None = None,
+        max_concurrent: int | None = None,
+        on_progress: Callable | None = None,
+        stream_id: str | None = None,
+        upload_images: bool = True,
+    ) -> AsyncGenerator["AmazonAuthor", None]:
+        return super().scrape_stream(
+            items=authors,
+            subprocess_batch_size=subprocess_batch_size,
+            max_concurrent=max_concurrent,
+            on_progress=on_progress,
+            stream_id=stream_id,
             upload_images=upload_images,
         )
