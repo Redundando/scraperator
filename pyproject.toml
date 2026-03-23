@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scraperator"
+version = "0.1.0"
+description = "ScrapedModel base class and Audible/Amazon scrapers"
+requires-python = ">=3.12"
+dependencies = [
+    "ghostscraper",
+    "dynamorator",
+    "beautifulsoup4",
+]
+
+[project.optional-dependencies]
+audible = []
+amazon = [
+    "boto3",
+    "httpx",
+    "Pillow",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scraperator*"]
