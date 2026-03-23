@@ -10,6 +10,7 @@ build/
 
 # Cache
 cache/
+data/
 
 # IDE
 .vscode/
