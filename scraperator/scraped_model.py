@@ -297,8 +297,8 @@ class ScrapedModel:
     @abstractmethod
     async def _parse_html(self, html: str, scraper=None) -> dict: ...
 
-    @Logger(exclude_args=["cls"])
     @classmethod
+    @Logger(exclude_args=["cls"])
     async def scrape_many(
         cls,
         items: list,
@@ -350,8 +350,8 @@ class ScrapedModel:
         cls._emit_static(on_progress, "batch_done", total=len(objs))
         return objs
 
-    @Logger(exclude_args=["cls"])
     @classmethod
+    @Logger(exclude_args=["cls"])
     async def scrape_stream(
         cls,
         items: list,
