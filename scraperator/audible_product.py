@@ -63,7 +63,7 @@ class AudibleProductData(TypedDict, total=False):
 
 class AudibleProduct(ScrapedModel):
     config: AudibleProductConfig = AudibleProductConfig()
-    _URL_RE = re.compile(r"audible\.([a-z.]+)/(?:pd|podcast)/[^/]*/?(B0[A-Z0-9]{8}|\d{10})(?:[?#]|$)", re.IGNORECASE)
+    _URL_RE = re.compile(r"audible\.([a-z.]+)/(?:pd|podcast|ac)/[^/]*/?(B0[A-Z0-9]{8}|\d{10})(?:[?#]|$)", re.IGNORECASE)
 
     @staticmethod
     def is_audible_url(url: str) -> bool:

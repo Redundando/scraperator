@@ -254,7 +254,7 @@ AudibleProduct(url="https://www.audible.com/pd/B06VX22V89")
 
 #### `is_audible_url(url) -> bool`
 
-Returns `True` if the URL matches the Audible product URL pattern (supports `/pd/` and `/podcast/` paths).
+Returns `True` if the URL matches the Audible product URL pattern (supports `/pd/`, `/podcast/`, and `/ac/` paths).
 
 - `url: str`
 - Returns: `bool`
