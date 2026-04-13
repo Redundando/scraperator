@@ -375,11 +375,7 @@ class ScrapedModel:
         items = list(dict.fromkeys(items))
         objs = [cls._from_input(item) for item in items]
 
-        if clear_cache:
-            for obj in objs:
-                obj.cache_hit = False
-                obj.data = {}
-        elif cls.config.cache == "dynamodb":
+        if not clear_cache and cls.config.cache == "dynamodb":
             # For stream, we skip per-instance cache loading and do a batch load instead
             for obj in objs:
                 obj.cache_hit = False
@@ -393,9 +389,11 @@ class ScrapedModel:
 
         uncached: list["ScrapedModel"] = []
         for obj in objs:
-            if obj.data:
+            if obj.data and not clear_cache:
                 yield obj
             else:
+                obj.cache_hit = False
+                obj.data = {}
                 uncached.append(obj)
 
         cls._emit_static(on_progress, "stream_cache_loaded", total=len(objs), cached=len(objs) - len(uncached), to_scrape=len(uncached))
