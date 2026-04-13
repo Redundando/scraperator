@@ -412,6 +412,7 @@ class ScrapedModel:
             subprocess_batch_size=subprocess_batch_size or cls.config.subprocess_batch_size,
             max_concurrent=max_concurrent or cls.config.stream_max_concurrent or cls.config.max_concurrent,
             on_progress=on_progress,
+            clear_cache=clear_cache,
             **gs_kwargs,
         )
 
