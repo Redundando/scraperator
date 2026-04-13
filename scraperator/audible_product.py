@@ -325,7 +325,7 @@ class AudibleProduct(ScrapedModel):
             {"name": c.text.strip(), "url": self._clean_url(c.get("href"))} for c in container.find_all("adbl-chip")
         ]
 
-    @Logger(exclude_args=["self"])
+    @Logger(exclude_args=["self", "html"])
     async def _parse_html(self, html: str, scraper=None) -> AudibleProductData:
         soup = BeautifulSoup(html, "html.parser")
         json_scripts = self._get_json_scripts(soup)

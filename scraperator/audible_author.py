@@ -95,7 +95,7 @@ class AudibleAuthor(ScrapedModel):
 
     # === Parsing ===
 
-    @Logger(exclude_args=["self"])
+    @Logger(exclude_args=["self", "html"])
     async def _parse_html(self, html: str, scraper=None) -> dict:
         soup = BeautifulSoup(html, "html.parser")
         ld_json_scripts = self._get_ld_json_scripts(soup)
