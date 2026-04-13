@@ -100,8 +100,7 @@ class ScrapedModel:
     @staticmethod
     def _is_cache_valid(data: dict) -> bool:
         return bool(
-            data.get("all_scrapes_unsuccessful")
-            or data.get("not_found")
+            data.get("not_found")
             or (data.get("response_code") or 0) < 500
         )
 
@@ -363,6 +362,7 @@ class ScrapedModel:
         on_progress: Callable | None = None,
         stream_id: str | None = None,
         upload_images: bool = True,
+        clear_cache: bool = False,
     ) -> AsyncGenerator["ScrapedModel", None]:
         """Memory-safe streaming alternative to scrape_many. Each chunk runs in a
         disposable subprocess so Chromium memory is reclaimed by the OS.
@@ -375,8 +375,12 @@ class ScrapedModel:
         items = list(dict.fromkeys(items))
         objs = [cls._from_input(item) for item in items]
 
-        # For stream, we skip per-instance cache loading and do a batch load instead
-        if cls.config.cache == "dynamodb":
+        if clear_cache:
+            for obj in objs:
+                obj.cache_hit = False
+                obj.data = {}
+        elif cls.config.cache == "dynamodb":
+            # For stream, we skip per-instance cache loading and do a batch load instead
             for obj in objs:
                 obj.cache_hit = False
                 obj.data = {}

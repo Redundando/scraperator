@@ -379,6 +379,7 @@ class AudibleProduct(ScrapedModel):
         on_progress: Callable | None = None,
         stream_id: str | None = None,
         upload_images: bool = True,
+        clear_cache: bool = False,
     ) -> AsyncGenerator["AudibleProduct", None]:
         return super().scrape_stream(
             items=products,
@@ -387,4 +388,5 @@ class AudibleProduct(ScrapedModel):
             on_progress=on_progress,
             stream_id=stream_id,
             upload_images=upload_images,
+            clear_cache=clear_cache,
         )

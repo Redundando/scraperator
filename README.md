@@ -112,7 +112,7 @@ ScrapedModel.__init__(self, on_progress: Callable | None = None)
 | `url` | `str` | **Abstract.** Canonical URL for this object |
 | `response_code` | `int \| None` | HTTP response code from the last scrape, stored in `data` |
 | `not_found` | `bool` | `True` if the last scrape returned a 4xx response |
-| `all_scrapes_unsuccessful` | `bool` | `True` if `max_scrape_attempts` consecutive 5xx/network failures occurred. Once set, `scrape()` becomes a no-op until cache is cleared |
+| `all_scrapes_unsuccessful` | `bool` | `True` if `max_scrape_attempts` consecutive 5xx/network failures occurred. Once set, `scrape()` becomes a no-op for the rest of the current session. The flag is **not** persisted across sessions — `load_cache()` treats `all_scrapes_unsuccessful` entries as invalid, so the item is retried on the next run |
 | `scrape_attempts` | `int` | Number of failed scrape attempts recorded in `data` |
 
 ### Instance methods
@@ -177,7 +177,7 @@ Scrapes a list of items concurrently using a shared browser pool.
 - `upload_images: bool` — Upload images to S3 after parsing. Default `True`.
 - Returns: `list[ScrapedModel]` — One object per deduplicated input, in input order. Cached items are included without re-scraping.
 
-#### `scrape_stream(items, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True) -> AsyncGenerator[ScrapedModel, None]` *(async generator)*
+#### `scrape_stream(items, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True, clear_cache=False) -> AsyncGenerator[ScrapedModel, None]` *(async generator)*
 
 Memory-safe streaming alternative to `scrape_many`. Runs scraping in disposable subprocesses so Chromium memory is reclaimed by the OS between batches.
 
@@ -187,6 +187,7 @@ Memory-safe streaming alternative to `scrape_many`. Runs scraping in disposable 
 - `on_progress: Callable | None` — Progress callback. Receives a `stream_cache_loaded` event after the initial cache batch load.
 - `stream_id: str | None` — Optional identifier passed to GhostScraper for stream resumption.
 - `upload_images: bool` — Upload images to S3 after parsing. Default `True`.
+- `clear_cache: bool` — Re-scrape all items even if cached. Default `False`.
 - Yields: `ScrapedModel` — Cached items are yielded first in input order, then uncached items are yielded as they complete.
 - When `config.cache == "dynamodb"`, performs a single batch DynamoDB read for all items before streaming begins, instead of one read per item.
 
@@ -275,7 +276,7 @@ Same semantics as `ScrapedModel.scrape_many`. `products` is a `list[ProductInput
 
 Returns: `list[AudibleProduct]`
 
-#### `scrape_stream(products, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True) -> AsyncGenerator[AudibleProduct, None]`
+#### `scrape_stream(products, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True, clear_cache=False) -> AsyncGenerator[AudibleProduct, None]`
 
 Same semantics as `ScrapedModel.scrape_stream`. `products` is a `list[ProductInput]`.
 
@@ -369,7 +370,7 @@ Same semantics as `ScrapedModel.scrape_many`. `authors` is a `list[AuthorInput]`
 
 Returns: `list[AudibleAuthor]`
 
-#### `scrape_stream(authors, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True) -> AsyncGenerator[AudibleAuthor, None]`
+#### `scrape_stream(authors, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True, clear_cache=False) -> AsyncGenerator[AudibleAuthor, None]`
 
 Same semantics as `ScrapedModel.scrape_stream`. `authors` is a `list[AuthorInput]`.
 
@@ -461,7 +462,7 @@ Same semantics as `ScrapedModel.scrape_many`. `authors` is a `list[AuthorInput]`
 
 Returns: `list[AmazonAuthor]`
 
-#### `scrape_stream(authors, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True) -> AsyncGenerator[AmazonAuthor, None]`
+#### `scrape_stream(authors, subprocess_batch_size=None, max_concurrent=None, on_progress=None, stream_id=None, upload_images=True, clear_cache=False) -> AsyncGenerator[AmazonAuthor, None]`
 
 Same semantics as `ScrapedModel.scrape_stream`. `authors` is a `list[AuthorInput]`.
 
@@ -489,8 +490,8 @@ Same behaviour as `AudibleAuthor`. S3 key is `{config.s3_prefix}{cache_key}.{ext
 
 - **5xx responses and network failures are never cached.** The object is retried on the next `scrape()` call.
 - **4xx (not found) and successful scrapes are cached permanently** (subject to `cache_ttl_days` on DynamoDB).
-- `all_scrapes_unsuccessful` is set after `max_scrape_attempts` consecutive 5xx/network failures. Once set, `scrape()` becomes a no-op until `clear_cache()` is called.
-- Cache validity check: an entry is valid if it has `all_scrapes_unsuccessful`, `not_found`, or a `response_code < 500`.
+- `all_scrapes_unsuccessful` is set after `max_scrape_attempts` consecutive 5xx/network failures. Once set, `scrape()` becomes a no-op for the rest of the current session. The flag is **not** persisted across sessions — `load_cache()` treats these entries as invalid, so the item is automatically retried on the next run.
+- Cache validity check: an entry is valid if it has `not_found` or a `response_code < 500`. Entries with only `all_scrapes_unsuccessful` are considered invalid and are not loaded from cache.
 
 ## Two independent cache tables
 
