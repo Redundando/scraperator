@@ -39,6 +39,7 @@ class ScrapedModelConfig:
     browser_restart_every: int | None = None
     subprocess_batch_size: int | None = None
     stream_max_concurrent: int | None = None
+    proxy: str | None = None
 
 
 _s3_client_cache = None
@@ -238,6 +239,8 @@ class ScrapedModel:
             gs["cache"] = False
         elif cls.config.scrape_cache == "dynamodb":
             gs["dynamodb_table"] = cls.config.scrape_cache_table
+        if cls.config.proxy:
+            gs["proxy"] = cls.config.proxy
         return gs
 
     @Logger(exclude_args=["self"])

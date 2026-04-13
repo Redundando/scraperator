@@ -2,7 +2,7 @@
 Package: dynamorator
 Version: 0.1.7
 Source: https://pypi.org/project/dynamorator/
-Fetched: 2026-03-23 10:49:54
+Fetched: 2026-04-13 10:37:06
 ---
 
 # Dynamorator

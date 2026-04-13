@@ -78,6 +78,7 @@ AudibleProduct.config = AudibleProductConfig(cache="dynamodb", cache_table="my-t
 | `browser_restart_every` | `int \| None` | `None` | Restart the browser process every N pages in `scrape_many` |
 | `subprocess_batch_size` | `int \| None` | `None` | Pages per subprocess chunk in `scrape_stream` |
 | `stream_max_concurrent` | `int \| None` | `None` | Max concurrent pages in `scrape_stream`; falls back to `max_concurrent` |
+| `proxy` | `str \| None` | `None` | Proxy URL passed to GhostScraper, e.g. `"socks5://localhost:1080"` |
 
 ---
 
