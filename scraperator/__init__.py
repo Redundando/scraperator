@@ -4,14 +4,25 @@ from .types import AuthorIdentity, AuthorInput, LinkedEntity, ProductIdentity, P
 import logging
 _logger = logging.getLogger(__name__)
 
-# audible extra — requires beautifulsoup4
+# Default API-based Audible product — requires httpx
 try:
     from .audible_product import AudibleProduct, AudibleProductConfig
+except ImportError:
+    _logger.debug("AudibleProduct (API) not available", exc_info=True)
+
+# Scraper fallback — requires beautifulsoup4, ghostscraper
+try:
+    from .audible_product_scraper import AudibleProductScraper, AudibleProductScraperConfig
+except ImportError:
+    _logger.debug("AudibleProductScraper not available", exc_info=True)
+
+# Audible author scraper — requires beautifulsoup4, ghostscraper
+try:
     from .audible_author import AudibleAuthor, AudibleAuthorConfig
 except ImportError:
-    _logger.debug("Audible extras not available", exc_info=True)
+    _logger.debug("Audible author extras not available", exc_info=True)
 
-# amazon extra — requires beautifulsoup4, boto3, httpx, Pillow
+# Amazon author scraper — requires beautifulsoup4, boto3, httpx, Pillow
 try:
     from .amazon_author import AmazonAuthor, AmazonAuthorConfig
 except ImportError:
@@ -23,12 +34,14 @@ __all__ = [
     "LinkedEntity",
     "ProductIdentity",
     "AuthorIdentity",
+    "ProductInput",
+    "AuthorInput",
     "AudibleProduct",
     "AudibleProductConfig",
-    "ProductInput",
+    "AudibleProductScraper",
+    "AudibleProductScraperConfig",
     "AudibleAuthor",
     "AudibleAuthorConfig",
-    "AuthorInput",
     "AmazonAuthor",
     "AmazonAuthorConfig",
 ]

@@ -9,14 +9,15 @@ description = "ScrapedModel base class and Audible/Amazon scrapers"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "ghostscraper",
     "dynamorator",
-    "logorator"
+    "logorator",
+    "httpx",
 ]
 
 [project.optional-dependencies]
-audible = [
+audible-scraper = [
     "beautifulsoup4",
+    "ghostscraper",
 ]
 amazon = [
     "beautifulsoup4",

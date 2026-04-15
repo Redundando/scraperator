@@ -1,64 +1,163 @@
+import asyncio
+import logging
 import re
+import time
 from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass
-from typing import TypedDict
+from dataclasses import dataclass, field
+from html import unescape
 
-from bs4 import BeautifulSoup
+import httpx
 from logorator import Logger
 
 from .scraped_model import ScrapedModel, ScrapedModelConfig
 from .types import LinkedEntity, ProductIdentity, ProductInput
 
+_logger = logging.getLogger(__name__)
+
+_API_BASE_URLS: dict[str, str] = {
+    "com": "https://api.audible.com",
+    "co.uk": "https://api.audible.co.uk",
+    "de": "https://api.audible.de",
+    "fr": "https://api.audible.fr",
+    "co.jp": "https://api.audible.co.jp",
+    "ca": "https://api.audible.ca",
+    "com.au": "https://api.audible.com.au",
+    "it": "https://api.audible.it",
+    "es": "https://api.audible.es",
+    "com.br": "https://api.audible.com.br",
+    "in": "https://api.audible.in",
+}
+
+_RESPONSE_GROUPS = (
+    "product_desc,product_attrs,contributors,media,rating,"
+    "category_ladders,relationships,tags,spotlight_tags"
+)
+
 
 @dataclass
 class AudibleProductConfig(ScrapedModelConfig):
-    audible_params: str = "overrideBaseCountry=true&ipRedirectOverride=true"
+    api_base_urls: dict[str, str] = field(default_factory=lambda: dict(_API_BASE_URLS))
+    response_groups: str = _RESPONSE_GROUPS
+    image_sizes: str = "500"
+    batch_size: int = 50
+    request_timeout: int = 30
 
 
-class _SeoRobots(TypedDict, total=False):
-    noindex: bool
-    nofollow: bool
+def _strip_html(html: str | None) -> str | None:
+    if not html:
+        return None
+    text = re.sub(r"<[^>]+>", "", html)
+    return unescape(text).strip() or None
 
 
-class _SeoOg(TypedDict, total=False):
-    title: str
-    description: str
-    image: str
-    url: str
+def _parse_api_product(product: dict, tld: str) -> dict:
+    base = _API_BASE_URLS.get(tld, f"https://api.audible.{tld}")
 
+    # Authors
+    authors = None
+    if product.get("authors"):
+        authors = []
+        for a in product["authors"]:
+            url = f"https://www.audible.{tld}/author/{a['asin']}" if a.get("asin") else None
+            authors.append({"name": a["name"], "url": url})
 
-class _SeoData(TypedDict, total=False):
-    title: str
-    description: str
-    canonical: str
-    robots: _SeoRobots
-    googlebot: _SeoRobots
-    og: _SeoOg
-    twitter: dict
-    hreflang: dict[str, list[str]]
+    # Narrators
+    narrators = None
+    if product.get("narrators"):
+        narrators = [{"name": n["name"], "url": None} for n in product["narrators"]]
 
+    # Series (from relationships)
+    series = None
+    series_sequence = None
+    for rel in product.get("relationships") or []:
+        if rel.get("relationship_type") == "series" and rel.get("relationship_to_product") == "parent":
+            url = f"https://www.audible.{tld}{rel['url']}" if rel.get("url") else None
+            series = {"name": rel["title"], "url": url}
+            series_sequence = rel.get("sequence")
+            break
 
-class AudibleProductData(TypedDict, total=False):
-    title: str | None
-    authors: list[LinkedEntity] | None
-    narrators: list[LinkedEntity] | None
-    series: LinkedEntity | None
-    tags: list[LinkedEntity] | None
-    release_date: str | None
-    rating: float | None
-    num_ratings: int | None
-    length_minutes: int | None
-    publisher: LinkedEntity | None
-    publisher_summary: str | None
-    language: str | None
-    format: str | None
-    is_audiobook: bool
-    is_audible_original: bool
-    image_url: str | None
-    available_regions: dict[str, str] | None
-    seo: _SeoData | None
-    response_code: int | None
-    cached_at: str
+    # Fall back to publication_name if no series relationship
+    if not series and product.get("publication_name"):
+        series = {"name": product["publication_name"], "url": None}
+
+    # Rating
+    rating_dist = (product.get("rating") or {}).get("overall_distribution") or {}
+    rating = rating_dist.get("average_rating")
+    num_ratings = rating_dist.get("num_ratings")
+
+    # Publisher
+    publisher_name = product.get("publisher_name")
+    publisher = {"name": publisher_name, "url": None} if publisher_name else None
+
+    # Tags
+    tags = None
+    if product.get("tags"):
+        tags = [
+            {"name": t["display_text"], "url": f"https://www.audible.{tld}/tag/{t['id']}"}
+            for t in sorted(product["tags"], key=lambda t: t.get("rank", 0))
+            if t.get("display_text") and t.get("id")
+        ] or None
+
+    # Spotlight tags
+    spotlight_tags = None
+    if product.get("spotlight_tags"):
+        spotlight_tags = [
+            {"name": t["display_text"], "type": t.get("type")}
+            for t in sorted(product["spotlight_tags"], key=lambda t: t.get("rank", 0))
+            if t.get("display_text")
+        ] or None
+
+    # Category ladders
+    category_ladders = None
+    if product.get("category_ladders"):
+        category_ladders = [
+            [{"id": node["id"], "name": node["name"]} for node in ladder.get("ladder", [])]
+            for ladder in product["category_ladders"]
+        ] or None
+
+    # Image
+    images = product.get("product_images") or {}
+    image_url = next(iter(images.values()), None)
+
+    # Format
+    fmt = product.get("format_type")
+    if fmt:
+        fmt = fmt.title()
+
+    # is_audiobook
+    cdt = product.get("content_delivery_type") or ""
+    is_audiobook = cdt in ("SinglePartBook", "MultiPartBook")
+
+    # is_audible_original
+    is_audible_original = "audible original" in (publisher_name or "").lower()
+
+    return {
+        "title": product.get("title"),
+        "subtitle": product.get("subtitle") or None,
+        "authors": authors,
+        "narrators": narrators,
+        "series": series,
+        "series_sequence": series_sequence,
+        "tags": tags,
+        "spotlight_tags": spotlight_tags,
+        "category_ladders": category_ladders,
+        "release_date": product.get("release_date"),
+        "rating": rating,
+        "num_ratings": num_ratings,
+        "length_minutes": product.get("runtime_length_min"),
+        "publisher": publisher,
+        "publisher_summary": _strip_html(product.get("merchandising_summary")),
+        "language": (product.get("language") or "").title() or None,
+        "format": fmt,
+        "is_audiobook": is_audiobook,
+        "is_audible_original": is_audible_original,
+        "content_delivery_type": cdt or None,
+        "is_vvab": product.get("is_vvab", False),
+        "has_children": product.get("has_children", False),
+        "image_url": image_url,
+        "available_regions": None,
+        "seo": None,
+    }
 
 
 class AudibleProduct(ScrapedModel):
@@ -103,9 +202,9 @@ class AudibleProduct(ScrapedModel):
         return self._url
 
     @property
-    def _scrape_url(self) -> str:
-        params = self.config.audible_params
-        return f"{self._url}?{params}" if params else self._url
+    def _api_url(self) -> str:
+        base = self.config.api_base_urls.get(self.tld, f"https://api.audible.{self.tld}")
+        return f"{base}/1.0/catalog/products/{self.asin}"
 
     @classmethod
     def _from_input(cls, item: ProductInput) -> "AudibleProduct":
@@ -117,6 +216,10 @@ class AudibleProduct(ScrapedModel):
     @property
     def title(self) -> str | None:
         return self.data.get("title")
+
+    @property
+    def subtitle(self) -> str | None:
+        return self.data.get("subtitle")
 
     @property
     def authors(self) -> list[LinkedEntity] | None:
@@ -141,8 +244,20 @@ class AudibleProduct(ScrapedModel):
         return self.data.get("series")
 
     @property
+    def series_sequence(self) -> str | None:
+        return self.data.get("series_sequence")
+
+    @property
     def tags(self) -> list[LinkedEntity] | None:
         return self.data.get("tags")
+
+    @property
+    def spotlight_tags(self) -> list[dict] | None:
+        return self.data.get("spotlight_tags")
+
+    @property
+    def category_ladders(self) -> list[list[dict]] | None:
+        return self.data.get("category_ladders")
 
     @property
     def release_date(self) -> str | None:
@@ -192,201 +307,243 @@ class AudibleProduct(ScrapedModel):
     def is_audible_original(self) -> bool:
         return self.data.get("is_audible_original", False)
 
+    @property
+    def content_delivery_type(self) -> str | None:
+        return self.data.get("content_delivery_type")
+
+    @property
+    def is_vvab(self) -> bool:
+        return self.data.get("is_vvab", False)
+
+    @property
+    def has_children(self) -> bool:
+        return self.data.get("has_children", False)
+
     # === Export ===
 
     def _identity_dict(self) -> ProductIdentity:
         return {"asin": self.asin, "tld": self.tld}
 
-    # === Parsing ===
+    # === API fetching ===
 
-    def _clean_url(self, url: str) -> str:
-        if not url:
-            return url
-        from urllib.parse import parse_qs, urlencode, urlparse
-
-        if url.startswith("/"):
-            url = f"https://www.audible.{self.tld}{url}"
-        if "?" not in url:
-            return url
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        search_params = {k: v for k, v in params.items() if k.startswith("search")}
-        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        return f"{base}?{urlencode(search_params, doseq=True)}" if search_params else base
-
-    def _extract_is_audiobook(self, soup) -> bool:
-        return any(s.get("@type") == "Audiobook" for s in self._flatten_ld_json(self._get_ld_json_scripts(soup)))
-
-    def _extract_title(self, soup) -> str | None:
-        el = soup.find("h1", slot="title")
-        return el.text.strip() if el else None
-
-    def _extract_authors(self, json_scripts: list) -> list[LinkedEntity] | None:
-        for m in json_scripts:
-            if m.get("authors"):
-                return [{"name": a["name"], "url": self._clean_url(a.get("url"))} for a in m["authors"]]
-        return None
-
-    def _extract_narrators(self, json_scripts: list) -> list[LinkedEntity] | None:
-        for m in json_scripts:
-            if m.get("narrators"):
-                return [{"name": n["name"], "url": self._clean_url(n.get("url"))} for n in m["narrators"]]
-        return None
-
-    def _extract_rating(self, json_scripts: list) -> tuple[float | None, int | None]:
-        for m in json_scripts:
-            if "rating" in m:
-                return m["rating"].get("value"), m["rating"].get("count")
-        return None, None
-
-    def _extract_release_date(self, json_scripts: list) -> str | None:
-        for m in json_scripts:
-            if "releaseDate" in m:
-                return m["releaseDate"]
-        return None
-
-    def _extract_length(self, json_scripts: list) -> int | None:
-        for m in json_scripts:
-            if "duration" in m:
-                numbers = re.findall(r"\d+", m["duration"])
-                if len(numbers) >= 2:
-                    return int(numbers[0]) * 60 + int(numbers[1])
-                elif len(numbers) == 1:
-                    return int(numbers[0]) * 60 if "hr" in m["duration"].lower() else int(numbers[0])
-        return None
-
-    def _extract_publisher(self, json_scripts: list) -> LinkedEntity | None:
-        for m in json_scripts:
-            if m.get("publisher"):
-                return {"name": m["publisher"]["name"], "url": self._clean_url(m["publisher"]["url"])}
-        return None
-
-    def _extract_language(self, json_scripts: list) -> str | None:
-        for m in json_scripts:
-            if "language" in m:
-                return m["language"]
-        return None
-
-    def _extract_format(self, json_scripts: list) -> str | None:
-        for m in json_scripts:
-            if "format" in m:
-                return m["format"]
-        return None
-
-    def _extract_publisher_summary(self, soup) -> str | None:
-        summary = soup.find("adbl-text-block", slot="summary")
-        if not summary:
-            return None
-        for p in summary.find_all("p"):
-            p.replace_with(p.get_text() + "\n\n")
-        return summary.get_text().strip()
-
-    def _extract_available_regions(self, soup) -> dict[str, str] | None:
-        regions = {
-            l.get("hreflang"): l.get("href")
-            for l in soup.find_all("link", rel="alternate", hreflang=True)
-            if l.get("hreflang") and l.get("href")
+    async def _fetch_single(self, client: httpx.AsyncClient) -> tuple[dict | None, int]:
+        params = {
+            "response_groups": self.config.response_groups,
+            "image_sizes": self.config.image_sizes,
         }
-        return regions or None
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                r = await client.get(self._api_url, params=params)
+                if r.status_code < 500:
+                    return r.json().get("product") if r.status_code == 200 else None, r.status_code
+                self._emit("scrape_failed", response_code=r.status_code, attempt=attempt, max_attempts=self.config.max_retries)
+            except (httpx.HTTPError, Exception) as exc:
+                _logger.debug("API request failed for %s: %s", self.asin, exc)
+                self._emit("scrape_failed", response_code=None, attempt=attempt, max_attempts=self.config.max_retries)
+            if attempt < self.config.max_retries:
+                await asyncio.sleep(self.config.backoff_factor ** (attempt - 1))
+        return None, 500
 
-    def _extract_image_url(self, soup) -> str | None:
-        el = soup.find("adbl-product-image")
-        if el:
-            img = el.find("img")
-            if img and img.get("src"):
-                return img["src"]
-        return None
+    @Logger(exclude_args=["self"])
+    async def scrape(self, clear_cache: bool = False, **kwargs) -> "AudibleProduct":
+        if self.data and not clear_cache:
+            self._emit("cache_hit")
+            return self
+        if self.data.get("all_scrapes_unsuccessful"):
+            self._emit("scrape_skipped", reason="all_scrapes_unsuccessful")
+            return self
 
-    def _extract_categories(self, json_scripts: list) -> list[LinkedEntity]:
-        for m in json_scripts:
-            if "categories" in m:
-                return [{"name": c["name"], "url": self._clean_url(c["url"])} for c in m["categories"]]
-        return []
+        async with httpx.AsyncClient(timeout=self.config.request_timeout) as client:
+            product, code = await self._fetch_single(client)
 
-    def _extract_series(self, soup) -> LinkedEntity | None:
-        link = soup.find("a", href=lambda h: h and "/series/" in h)
-        return {"name": link.text.strip(), "url": self._clean_url(link.get("href"))} if link else None
+        if product and code == 200:
+            self.data = _parse_api_product(product, self.tld)
+            self.data["response_code"] = code
+            self._emit("parse_complete", response_code=code)
+        elif code and 400 <= code < 500:
+            self.data["response_code"] = code
+            self.data["not_found"] = True
+            self._emit("not_found", response_code=code)
+        else:
+            self.data["response_code"] = code
+            attempts = self.data.get("scrape_attempts", 0) + 1
+            self.data["scrape_attempts"] = attempts
+            if attempts >= self.config.max_scrape_attempts:
+                self.data["all_scrapes_unsuccessful"] = True
+                self._emit("all_scrapes_unsuccessful", attempt=attempts)
 
-    def _extract_is_audible_original(self, soup, json_scripts: list) -> bool:
-        if soup.find(attrs={"name": "logo-audible-original"}):
-            return True
-        for m in json_scripts:
-            if (m.get("publisher") or {}).get("name", "").lower() == "audible original":
-                return True
-            if "original recording audiobook" in (m.get("format") or "").lower():
-                return True
-        return False
+        self.save_cache()
+        self._emit("cache_saved")
+        return self
 
-    def _extract_chip_tags(self, soup) -> list[dict]:
-        container = soup.find(class_="product-topictag-impression")
-        if not container:
-            return []
-        return [
-            {"name": c.text.strip(), "url": self._clean_url(c.get("href"))} for c in container.find_all("adbl-chip")
-        ]
-
-    @Logger(exclude_args=["self", "html"])
-    async def _parse_html(self, html: str, scraper=None) -> AudibleProductData:
-        soup = BeautifulSoup(html, "html.parser")
-        json_scripts = self._get_json_scripts(soup)
-        rating, num_ratings = self._extract_rating(json_scripts)
-        categories = self._extract_categories(json_scripts)
-        chip_tags = self._extract_chip_tags(soup)
-        return {
-            "title": self._extract_title(soup),
-            "authors": self._extract_authors(json_scripts),
-            "narrators": self._extract_narrators(json_scripts),
-            "series": self._extract_series(soup),
-            "tags": (categories + chip_tags) or None,
-            "release_date": self._extract_release_date(json_scripts),
-            "rating": rating,
-            "num_ratings": num_ratings,
-            "length_minutes": self._extract_length(json_scripts),
-            "publisher": self._extract_publisher(json_scripts),
-            "publisher_summary": self._extract_publisher_summary(soup),
-            "language": self._extract_language(json_scripts),
-            "format": self._extract_format(json_scripts),
-            "is_audiobook": self._extract_is_audiobook(soup),
-            "is_audible_original": self._extract_is_audible_original(soup, json_scripts),
-            "image_url": self._extract_image_url(soup),
-            "available_regions": self._extract_available_regions(soup),
-            "seo": await scraper.seo() if scraper else None,
-        }
+    # === Batch ===
 
     @classmethod
+    async def _fetch_batch(
+        cls,
+        client: httpx.AsyncClient,
+        asins: list[str],
+        tld: str,
+    ) -> dict[str, tuple[dict | None, int]]:
+        base = cls.config.api_base_urls.get(tld, f"https://api.audible.{tld}")
+        url = f"{base}/1.0/catalog/products"
+        params = {
+            "asins": ",".join(asins),
+            "response_groups": cls.config.response_groups,
+            "image_sizes": cls.config.image_sizes,
+        }
+        for attempt in range(1, cls.config.max_retries + 1):
+            try:
+                r = await client.get(url, params=params)
+                if r.status_code == 200:
+                    products = r.json().get("products") or []
+                    result = {p["asin"]: (p, 200) for p in products}
+                    for asin in asins:
+                        if asin not in result:
+                            result[asin] = (None, 404)
+                    return result
+                if r.status_code < 500:
+                    return {asin: (None, r.status_code) for asin in asins}
+            except (httpx.HTTPError, Exception) as exc:
+                _logger.debug("Batch API request failed: %s", exc)
+            if attempt < cls.config.max_retries:
+                await asyncio.sleep(cls.config.backoff_factor ** (attempt - 1))
+        return {asin: (None, 500) for asin in asins}
+
+    @classmethod
+    @Logger(exclude_args=["cls"])
     async def scrape_many(
         cls,
         products: list[ProductInput],
         max_concurrent: int | None = None,
         on_progress: Callable | None = None,
         clear_cache: bool = False,
-        upload_images: bool = True,
+        **kwargs,
     ) -> list["AudibleProduct"]:
-        return await super().scrape_many(
-            items=products,
-            max_concurrent=max_concurrent,
-            on_progress=on_progress,
-            clear_cache=clear_cache,
-            upload_images=upload_images,
-        )
+        products = list(dict.fromkeys(products))
+        objs = [cls._from_input(item) for item in products]
+        to_scrape = [o for o in objs if not o.data or clear_cache]
+
+        cls._emit_static(on_progress, "batch_started", total=len(objs), to_scrape=len(to_scrape), cached=len(objs) - len(to_scrape))
+
+        if to_scrape:
+            # Group by TLD
+            by_tld: dict[str, list[AudibleProduct]] = {}
+            for obj in to_scrape:
+                by_tld.setdefault(obj.tld, []).append(obj)
+
+            async with httpx.AsyncClient(timeout=cls.config.request_timeout) as client:
+                sem = asyncio.Semaphore(max_concurrent or cls.config.max_concurrent)
+
+                async def _fetch_chunk(tld: str, chunk: list[AudibleProduct]):
+                    async with sem:
+                        obj_by_asin = {o.asin: o for o in chunk}
+                        results = await cls._fetch_batch(client, list(obj_by_asin.keys()), tld)
+                        for asin, (product, code) in results.items():
+                            obj = obj_by_asin.get(asin)
+                            if not obj:
+                                continue
+                            if product and code == 200:
+                                obj.data = _parse_api_product(product, tld)
+                                obj.data["response_code"] = code
+                                obj._emit("parse_complete", response_code=code)
+                            elif code and 400 <= code < 500:
+                                obj.data["response_code"] = code
+                                obj.data["not_found"] = True
+                                obj._emit("not_found", response_code=code)
+                            else:
+                                obj.data["response_code"] = code
+                                attempts = obj.data.get("scrape_attempts", 0) + 1
+                                obj.data["scrape_attempts"] = attempts
+                                if attempts >= cls.config.max_scrape_attempts:
+                                    obj.data["all_scrapes_unsuccessful"] = True
+                                    obj._emit("all_scrapes_unsuccessful", attempt=attempts)
+                            obj.save_cache()
+                            obj._emit("cache_saved")
+
+                tasks = []
+                batch_size = cls.config.batch_size
+                for tld, tld_objs in by_tld.items():
+                    for i in range(0, len(tld_objs), batch_size):
+                        tasks.append(_fetch_chunk(tld, tld_objs[i:i + batch_size]))
+                await asyncio.gather(*tasks)
+
+        cls._emit_static(on_progress, "batch_done", total=len(objs))
+        return objs
 
     @classmethod
-    def scrape_stream(
+    @Logger(exclude_args=["cls"])
+    async def scrape_stream(
         cls,
         products: list[ProductInput],
-        subprocess_batch_size: int | None = None,
         max_concurrent: int | None = None,
         on_progress: Callable | None = None,
-        stream_id: str | None = None,
-        upload_images: bool = True,
         clear_cache: bool = False,
+        **kwargs,
     ) -> AsyncGenerator["AudibleProduct", None]:
-        return super().scrape_stream(
-            items=products,
-            subprocess_batch_size=subprocess_batch_size,
-            max_concurrent=max_concurrent,
-            on_progress=on_progress,
-            stream_id=stream_id,
-            upload_images=upload_images,
-            clear_cache=clear_cache,
-        )
+        products = list(dict.fromkeys(products))
+        objs = [cls._from_input(item) for item in products]
+
+        if not clear_cache and cls.config.cache == "dynamodb":
+            for obj in objs:
+                obj.cache_hit = False
+                obj.data = {}
+            cached_data = await asyncio.to_thread(cls._batch_load_cache, objs)
+            for obj in objs:
+                data = cached_data.get(obj.cache_key)
+                if data and cls._is_cache_valid(data):
+                    obj.data = data
+                    obj.cache_hit = True
+
+        uncached = []
+        for obj in objs:
+            if obj.data and not clear_cache:
+                yield obj
+            else:
+                obj.cache_hit = False
+                obj.data = {}
+                uncached.append(obj)
+
+        cls._emit_static(on_progress, "stream_cache_loaded", total=len(objs), cached=len(objs) - len(uncached), to_scrape=len(uncached))
+
+        if not uncached:
+            return
+
+        by_tld: dict[str, list[AudibleProduct]] = {}
+        for obj in uncached:
+            by_tld.setdefault(obj.tld, []).append(obj)
+
+        batch_size = cls.config.batch_size
+        async with httpx.AsyncClient(timeout=cls.config.request_timeout) as client:
+            for tld, tld_objs in by_tld.items():
+                for i in range(0, len(tld_objs), batch_size):
+                    chunk = tld_objs[i:i + batch_size]
+                    obj_by_asin = {o.asin: o for o in chunk}
+                    results = await cls._fetch_batch(client, list(obj_by_asin.keys()), tld)
+                    for asin, (product, code) in results.items():
+                        obj = obj_by_asin.get(asin)
+                        if not obj:
+                            continue
+                        if product and code == 200:
+                            obj.data = _parse_api_product(product, tld)
+                            obj.data["response_code"] = code
+                            obj._emit("parse_complete", response_code=code)
+                        elif code and 400 <= code < 500:
+                            obj.data["response_code"] = code
+                            obj.data["not_found"] = True
+                            obj._emit("not_found", response_code=code)
+                        else:
+                            obj.data["response_code"] = code
+                            attempts = obj.data.get("scrape_attempts", 0) + 1
+                            obj.data["scrape_attempts"] = attempts
+                            if attempts >= cls.config.max_scrape_attempts:
+                                obj.data["all_scrapes_unsuccessful"] = True
+                                obj._emit("all_scrapes_unsuccessful", attempt=attempts)
+                        obj.save_cache()
+                        obj._emit("cache_saved")
+                        yield obj
+
+    # === Abstract method stubs (not used by API class) ===
+
+    async def _parse_html(self, html: str, scraper=None) -> dict:
+        raise NotImplementedError("API-based AudibleProduct does not parse HTML")
