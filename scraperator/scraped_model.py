@@ -407,7 +407,7 @@ class ScrapedModel:
         stream = GhostScraper.create_stream(
             urls=list(obj_by_url.keys()),
             stream_id=stream_id,
-            subprocess_batch_size=subprocess_batch_size or cls.config.subprocess_batch_size,
+            subprocess_batch_size=subprocess_batch_size or cls.config.subprocess_batch_size or max_concurrent or cls.config.stream_max_concurrent or cls.config.max_concurrent,
             max_concurrent=max_concurrent or cls.config.stream_max_concurrent or cls.config.max_concurrent,
             on_progress=on_progress,
             clear_cache=clear_cache,

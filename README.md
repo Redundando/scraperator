@@ -76,7 +76,7 @@ AudibleProduct.config = AudibleProductConfig(cache="dynamodb", cache_table="my-t
 | `load_strategies` | `list[str]` | `["domcontentloaded"]` | Playwright load event strategies |
 | `wait_for_selectors` | `list[str]` | `[]` | CSS selectors to wait for before considering the page loaded |
 | `browser_restart_every` | `int \| None` | `None` | Restart the browser process every N pages in `scrape_many` |
-| `subprocess_batch_size` | `int \| None` | `None` | Pages per subprocess chunk in `scrape_stream` |
+| `subprocess_batch_size` | `int \| None` | `None` | Pages per subprocess chunk in `scrape_stream`. Falls back to `stream_max_concurrent`, then `max_concurrent` |
 | `stream_max_concurrent` | `int \| None` | `None` | Max concurrent pages in `scrape_stream`; falls back to `max_concurrent` |
 | `proxy` | `str \| None` | `None` | Proxy URL passed to GhostScraper, e.g. `"socks5://localhost:1080"` |
 
