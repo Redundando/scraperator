@@ -232,8 +232,8 @@ AudibleProduct(url="https://www.audible.com/pd/B06VX22V89")
 |---|---|---|
 | `title` | `str \| None` | Product title |
 | `subtitle` | `str \| None` | Subtitle (e.g. series subtitle, "A Novel") |
-| `authors` | `list[LinkedEntity] \| None` | Authors. `url` is `https://www.audible.{tld}/author/{author_asin}` when author ASIN is available, otherwise `None`. |
-| `narrators` | `list[LinkedEntity] \| None` | Narrators. `url` is always `None` (API does not provide narrator links). |
+| `authors` | `list[LinkedEntity] \| None` | Authors. `url` is `https://www.audible.{tld}/author/{author_asin}` when author ASIN is available, otherwise falls back to `https://www.audible.{tld}/search?searchAuthor={name}`. |
+| `narrators` | `list[LinkedEntity] \| None` | Narrators. `url` is `https://www.audible.{tld}/search?searchNarrator={name}`. |
 | `series` | `LinkedEntity \| None` | Series name and URL. Extracted from `relationships` where `relationship_type == "series"`. `url` is the full series page URL. `None` if not part of a series. Falls back to `publication_name` (with `url: None`) if no relationship data. |
 | `series_sequence` | `str \| None` | Book's position in the series (e.g. `"5"`, `"13"`). `None` if not part of a series. |
 | `tags` | `list[LinkedEntity] \| None` | Content tags ordered by rank. Includes genre, theme, mood, and award tags. `url` is `https://www.audible.{tld}/tag/{tag_id}`. |

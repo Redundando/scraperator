@@ -5,6 +5,7 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from html import unescape
+from urllib.parse import quote_plus
 
 import httpx
 from logorator import Logger
@@ -58,13 +59,16 @@ def _parse_api_product(product: dict, tld: str) -> dict:
     if product.get("authors"):
         authors = []
         for a in product["authors"]:
-            url = f"https://www.audible.{tld}/author/{a['asin']}" if a.get("asin") else None
+            url = f"https://www.audible.{tld}/author/{a['asin']}" if a.get("asin") else f"https://www.audible.{tld}/search?searchAuthor={quote_plus(a['name'])}"
             authors.append({"name": a["name"], "url": url})
 
     # Narrators
     narrators = None
     if product.get("narrators"):
-        narrators = [{"name": n["name"], "url": None} for n in product["narrators"]]
+        narrators = [
+            {"name": n["name"], "url": f"https://www.audible.{tld}/search?searchNarrator={quote_plus(n['name'])}"}
+            for n in product["narrators"]
+        ]
 
     # Series (from relationships)
     series = None
