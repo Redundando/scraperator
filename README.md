@@ -194,6 +194,13 @@ GET https://api.audible.{tld}/1.0/catalog/products
     &response_groups=...&image_sizes=...
 ```
 
+Similar products endpoint (when `get_similar_products=True`):
+```
+GET https://api.audible.{tld}/1.0/catalog/products/{asin}/sims
+    ?num_results=25
+```
+Returns only ASINs (no response groups requested). Typically yields 5–25 similar products depending on the title and marketplace.
+
 ### AudibleProductConfig
 
 Inherits all fields from `ScrapedModelConfig`, plus:
@@ -205,6 +212,7 @@ Inherits all fields from `ScrapedModelConfig`, plus:
 | `image_sizes` | `str` | `"500"` | Image pixel sizes to request |
 | `batch_size` | `int` | `50` | Max ASINs per batch API call |
 | `request_timeout` | `int` | `30` | httpx timeout in seconds |
+| `similar_products_num_results` | `int` | `25` | Max similar products to fetch from the `/sims` endpoint |
 
 Supported marketplaces: `com`, `co.uk`, `de`, `fr`, `co.jp`, `ca`, `com.au`, `it`, `es`, `com.br`, `in`.
 
@@ -236,7 +244,7 @@ AudibleProduct(url="https://www.audible.com/pd/B06VX22V89")
 
 | Method | Description |
 |---|---|
-| `await scrape(clear_cache=False) -> AudibleProduct` | Fetch from API, populate `self.data`, save cache. Returns `self`. |
+| `await scrape(clear_cache=False, get_similar_products=False) -> AudibleProduct` | Fetch from API, populate `self.data`, save cache. When `get_similar_products=True`, also fetches ASINs from the `/sims` endpoint. Returns `self`. |
 
 ### Class methods
 
@@ -276,6 +284,7 @@ AudibleProduct(url="https://www.audible.com/pd/B06VX22V89")
 | `image_url` | `str \| None` | Cover image URL |
 | `available_regions` | `None` | Always `None`. Not available from API. Use `AudibleProductScraper` if needed. |
 | `seo` | `None` | Always `None`. Not available from API. Use `AudibleProductScraper` if needed. |
+| `similar_product_asins` | `list[str] \| None` | ASINs of similar products. Only present when `get_similar_products=True` was used. `None` if not fetched. |
 | `response_code` | `int \| None` | HTTP status code from the API call |
 | `cached_at` | `str` | UTC ISO timestamp set by `save_cache()` |
 
@@ -287,6 +296,7 @@ All `data` keys above are accessible as properties. Additional convenience prope
 |---|---|---|
 | `author` | `LinkedEntity \| None` | First author, or `None` |
 | `narrator` | `LinkedEntity \| None` | First narrator, or `None` |
+| `similar_products` | `list[ProductInput] \| None` | `(tld, asin)` tuples for similar products. `None` if `get_similar_products` was not used. |
 
 ### `to_dict()` output
 
@@ -708,6 +718,22 @@ async def main():
     print(p.title, p.authors, p.series, p.series_sequence)
 
 asyncio.run(main())
+```
+
+### AudibleProduct — similar products
+
+```python
+from scraperator import AudibleProduct
+
+p = AudibleProduct(tld="com", asin="B08G9PRS1K")
+await p.scrape(get_similar_products=True)
+
+print(f"{p.title} has {len(p.similar_products)} similar products")
+
+# Feed similar products into the batch pipeline
+similar = await AudibleProduct.scrape_many(p.similar_products)
+for s in similar:
+    print(f"  - {s.title} by {s.author['name']}")
 ```
 
 ### AudibleProduct — batch

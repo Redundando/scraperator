@@ -42,6 +42,7 @@ class AudibleProductConfig(ScrapedModelConfig):
     image_sizes: str = "500"
     batch_size: int = 50
     request_timeout: int = 30
+    similar_products_num_results: int = 25
 
 
 def _strip_html(html: str | None) -> str | None:
@@ -323,6 +324,14 @@ class AudibleProduct(ScrapedModel):
     def has_children(self) -> bool:
         return self.data.get("has_children", False)
 
+    @property
+    def similar_products(self) -> list[ProductInput] | None:
+        """List of (tld, asin) tuples for similar products, or None if not fetched."""
+        asins = self.data.get("similar_product_asins")
+        if asins is None:
+            return None
+        return [(self.tld, asin) for asin in asins]
+
     # === Export ===
 
     def _identity_dict(self) -> ProductIdentity:
@@ -348,11 +357,32 @@ class AudibleProduct(ScrapedModel):
                 await asyncio.sleep(self.config.backoff_factor ** (attempt - 1))
         return None, 500
 
+    async def _fetch_sims(self, client: httpx.AsyncClient) -> list[str]:
+        """Fetch similar product ASINs from the /sims endpoint."""
+        base = self.config.api_base_urls.get(self.tld, f"https://api.audible.{self.tld}")
+        url = f"{base}/1.0/catalog/products/{self.asin}/sims"
+        params = {"num_results": self.config.similar_products_num_results}
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                r = await client.get(url, params=params)
+                if r.status_code == 200:
+                    return [p["asin"] for p in r.json().get("similar_products", []) if p.get("asin")]
+                if r.status_code < 500:
+                    _logger.debug("Sims returned %d for %s", r.status_code, self.asin)
+                    return []
+            except (httpx.HTTPError, Exception) as exc:
+                _logger.debug("Sims request failed for %s: %s", self.asin, exc)
+            if attempt < self.config.max_retries:
+                await asyncio.sleep(self.config.backoff_factor ** (attempt - 1))
+        return []
+
     @Logger(exclude_args=["self"])
-    async def scrape(self, clear_cache: bool = False, **kwargs) -> "AudibleProduct":
+    async def scrape(self, clear_cache: bool = False, get_similar_products: bool = False, **kwargs) -> "AudibleProduct":
         if self.data and not clear_cache:
-            self._emit("cache_hit")
-            return self
+            # If sims requested but not yet fetched, don't short-circuit
+            if not get_similar_products or "similar_product_asins" in self.data:
+                self._emit("cache_hit")
+                return self
         if self.data.get("all_scrapes_unsuccessful"):
             self._emit("scrape_skipped", reason="all_scrapes_unsuccessful")
             return self
@@ -360,21 +390,24 @@ class AudibleProduct(ScrapedModel):
         async with httpx.AsyncClient(timeout=self.config.request_timeout) as client:
             product, code = await self._fetch_single(client)
 
-        if product and code == 200:
-            self.data = _parse_api_product(product, self.tld)
-            self.data["response_code"] = code
-            self._emit("parse_complete", response_code=code)
-        elif code and 400 <= code < 500:
-            self.data["response_code"] = code
-            self.data["not_found"] = True
-            self._emit("not_found", response_code=code)
-        else:
-            self.data["response_code"] = code
-            attempts = self.data.get("scrape_attempts", 0) + 1
-            self.data["scrape_attempts"] = attempts
-            if attempts >= self.config.max_scrape_attempts:
-                self.data["all_scrapes_unsuccessful"] = True
-                self._emit("all_scrapes_unsuccessful", attempt=attempts)
+            if product and code == 200:
+                self.data = _parse_api_product(product, self.tld)
+                self.data["response_code"] = code
+                self._emit("parse_complete", response_code=code)
+
+                if get_similar_products:
+                    self.data["similar_product_asins"] = await self._fetch_sims(client)
+            elif code and 400 <= code < 500:
+                self.data["response_code"] = code
+                self.data["not_found"] = True
+                self._emit("not_found", response_code=code)
+            else:
+                self.data["response_code"] = code
+                attempts = self.data.get("scrape_attempts", 0) + 1
+                self.data["scrape_attempts"] = attempts
+                if attempts >= self.config.max_scrape_attempts:
+                    self.data["all_scrapes_unsuccessful"] = True
+                    self._emit("all_scrapes_unsuccessful", attempt=attempts)
 
         self.save_cache()
         self._emit("cache_saved")
