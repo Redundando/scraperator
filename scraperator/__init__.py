@@ -1,5 +1,5 @@
 from .scraped_model import ScrapedModel, ScrapedModelConfig
-from .types import AuthorIdentity, AuthorInput, LinkedEntity, ProductIdentity, ProductInput
+from .types import AuthorIdentity, AuthorInput, LinkedEntity, ProductIdentity, ProductInput, SearchInput, SearchResult
 
 import logging
 _logger = logging.getLogger(__name__)
@@ -9,6 +9,12 @@ try:
     from .audible_product import AudibleProduct, AudibleProductConfig
 except ImportError:
     _logger.debug("AudibleProduct (API) not available", exc_info=True)
+
+# Audible search — requires httpx + AudibleProduct
+try:
+    from .audible_search import AudibleSearch, AudibleSearchConfig
+except ImportError:
+    _logger.debug("AudibleSearch not available", exc_info=True)
 
 # Scraper fallback — requires beautifulsoup4, ghostscraper
 try:
@@ -36,8 +42,12 @@ __all__ = [
     "AuthorIdentity",
     "ProductInput",
     "AuthorInput",
+    "SearchInput",
+    "SearchResult",
     "AudibleProduct",
     "AudibleProductConfig",
+    "AudibleSearch",
+    "AudibleSearchConfig",
     "AudibleProductScraper",
     "AudibleProductScraperConfig",
     "AudibleAuthor",

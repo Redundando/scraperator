@@ -19,6 +19,18 @@ class AuthorIdentity(TypedDict):
     tld: str
 
 
+class SearchResult(TypedDict):
+    asin: str
+    title: str | None
+    authors: list[LinkedEntity] | None
+    narrators: list[LinkedEntity] | None
+    language: str | None
+    release_date: str | None
+    runtime_length_min: int | None
+    content_delivery_type: str | None
+    image_url: str | None
+
+
 # --- Immutable inputs (construction & destructuring) ---
 
 
@@ -30,3 +42,8 @@ class ProductInput(NamedTuple):
 class AuthorInput(NamedTuple):
     tld: str
     author_id: str
+
+
+class SearchInput(NamedTuple):
+    tld: str
+    keywords: str

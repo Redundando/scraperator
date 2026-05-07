@@ -2,7 +2,7 @@
 
 Audible/Amazon product and author data with dual-backend caching (local JSON or DynamoDB).
 
-`AudibleProduct` fetches from the **Audible Catalog API** (no browser required). Author scrapers (`AudibleAuthor`, `AmazonAuthor`) use `ghostscraper` for browser-based scraping. A scraper-based fallback for products (`AudibleProductScraper`) is available for fields the API does not cover.
+`AudibleProduct` fetches from the **Audible Catalog API** (no browser required). `AudibleSearch` provides keyword-based catalog search, returning lightweight results or fully-hydrated `AudibleProduct` instances. Author scrapers (`AudibleAuthor`, `AmazonAuthor`) use `ghostscraper` for browser-based scraping. A scraper-based fallback for products (`AudibleProductScraper`) is available for fields the API does not cover.
 
 ## Installation
 
@@ -52,6 +52,27 @@ Core dependencies: `httpx`, `dynamorator`, `logorator`.
 |---|---|
 | `author_id` | `str` |
 | `tld` | `str` |
+
+### `SearchInput(tld, keywords)` — `NamedTuple`
+
+| Field | Type | Description |
+|---|---|---|
+| `tld` | `str` | Marketplace TLD |
+| `keywords` | `str` | Search keywords (title, author, or any combination) |
+
+### `SearchResult` — `TypedDict`
+
+| Field | Type | Description |
+|---|---|---|
+| `asin` | `str` | Product ASIN |
+| `title` | `str \| None` | Product title |
+| `authors` | `list[LinkedEntity] \| None` | Authors (name only, `url` is `None`) |
+| `narrators` | `list[LinkedEntity] \| None` | Narrators (name only, `url` is `None`) |
+| `language` | `str \| None` | Language, title-cased |
+| `release_date` | `str \| None` | Release date |
+| `runtime_length_min` | `int \| None` | Runtime in minutes |
+| `content_delivery_type` | `str \| None` | Product type |
+| `image_url` | `str \| None` | Cover image URL |
 
 ---
 
@@ -273,6 +294,127 @@ All `data` keys above are accessible as properties. Additional convenience prope
 
 ---
 
+## AudibleSearch
+
+Searches the Audible catalog by keywords using the **Audible Catalog Search API**. Standalone class (does not inherit `ScrapedModel`) with its own caching, retry logic, and progress events. No browser required.
+
+### Data source
+
+```
+GET https://api.audible.{tld}/1.0/catalog/search
+    ?keywords={keywords}
+    &content_type=Audiobook
+    &size=10
+    &response_groups=contributors,product_attrs,product_desc,media
+    &products_sort_by=Relevance
+```
+
+### AudibleSearchConfig
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `api_base_urls` | `dict[str, str]` | All 11 Audible marketplaces | Map of TLD to API base URL |
+| `response_groups` | `str` | `"contributors,product_attrs,product_desc,media"` | Response groups for lightweight search |
+| `full_response_groups` | `str` | Same as `AudibleProductConfig.response_groups` | Response groups for full hydration mode |
+| `content_type` | `str` | `"Audiobook"` | Default content type filter |
+| `size` | `int` | `10` | Results per search (max 50) |
+| `request_timeout` | `int` | `30` | httpx timeout in seconds |
+| `cache` | `str` | `"local"` | `"local"`, `"dynamodb"`, or `"none"` |
+| `cache_table` | `str \| None` | `None` | DynamoDB table name |
+| `cache_ttl_days` | `int` | `30` | TTL for cache entries |
+| `cache_directory` | `str` | `"cache"` | Directory for local JSON cache |
+| `aws_region` | `str \| None` | `None` | AWS region for DynamoDB |
+| `max_retries` | `int` | `3` | Per-request retries |
+| `backoff_factor` | `float` | `2.0` | Exponential backoff multiplier |
+| `max_concurrent` | `int` | `3` | Max concurrent searches in `scrape_many` / `scrape_stream` |
+| `request_delay` | `float` | `0.5` | Minimum seconds between requests (throttling) |
+
+### Construction
+
+```python
+AudibleSearch(tld="de", keywords="Der Hobbit Tolkien")
+AudibleSearch(tld="com", keywords="Atomic Habits", size=25)
+AudibleSearch(tld="com", keywords="Fantasy", content_type="All")
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `tld` | `str` | Yes | Marketplace TLD |
+| `keywords` | `str` | Yes | Search keywords (title, author, genre, or any combination) |
+| `content_type` | `str \| None` | No | Override config default (`"Audiobook"`) |
+| `size` | `int \| None` | No | Override config default (`10`). Max 50. |
+| `on_progress` | `Callable \| None` | No | Progress callback |
+
+`cache_key`: `"audible_search_{tld}_{md5(keywords.lower().strip())}_{content_type}_{size}"`
+
+### Instance attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `data` | `dict` | Raw cached/fetched response data |
+| `cache_hit` | `bool` | `True` if data was loaded from cache |
+| `on_progress` | `Callable \| None` | Progress callback |
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `cache_key` | `str` | Computed cache key |
+| `products` | `list[SearchResult]` | Parsed search results as typed dicts |
+| `product_inputs` | `list[ProductInput]` | Convenience — `ProductInput(tld, asin)` for each result |
+| `total_results` | `int \| None` | Total matching results from API |
+| `response_code` | `int \| None` | HTTP status from last fetch |
+
+### Instance methods
+
+| Method | Description |
+|---|---|
+| `await scrape(clear_cache=False) -> AudibleSearch` | Fetch search results from API. No-op if cached (unless `clear_cache=True`). |
+| `await scrape_products(clear_cache=False) -> list[AudibleProduct]` | Fetch with full response groups, return hydrated `AudibleProduct` instances. Products are cached under their normal `audible_product_{tld}_{asin}` key. |
+| `load_cache() -> bool` | Load from cache. Called automatically in `__init__`. |
+| `save_cache() -> None` | Persist to cache. |
+| `clear_cache_entry() -> None` | Delete cache entry and reset `self.data`. |
+
+### Class methods
+
+| Method | Description |
+|---|---|
+| `await scrape_many(items, max_concurrent=None, on_progress=None, clear_cache=False) -> list[AudibleSearch]` | Run multiple searches concurrently with throttling. Deduplicates inputs. |
+| `async scrape_stream(items, max_concurrent=None, on_progress=None, clear_cache=False) -> AsyncGenerator[AudibleSearch, None]` | Yields cached results first, then fetched results as they complete. |
+
+`items` is a `list[SearchInput]`.
+
+### Progress events
+
+| Event | Extra keys | Description |
+|---|---|---|
+| `cache_hit` | `keywords`, `tld` | Loaded from cache |
+| `search_complete` | `keywords`, `tld`, `response_code`, `num_results` | API returned results |
+| `search_failed` | `keywords`, `tld`, `response_code`, `attempt`, `max_attempts` | 5xx or network error |
+| `no_results` | `keywords`, `tld` | 200 but empty products list |
+| `batch_started` | `total`, `to_search`, `cached` | `scrape_many` started |
+| `batch_done` | `total` | `scrape_many` finished |
+| `stream_cache_loaded` | `total`, `cached`, `to_search` | `scrape_stream` cache phase done |
+
+### Cache behaviour
+
+- Search results are cached using the same local JSON / DynamoDB backends as `ScrapedModel`.
+- 5xx responses are **never cached** — the search is retried on the next call.
+- 200 responses (including zero-result searches) are cached for `cache_ttl_days`.
+- `clear_cache=True` invalidates the cache entry before fetching.
+
+### Hydration via `scrape_products()`
+
+When `scrape_products()` is called, the search API is queried with the full set of response groups (same as `AudibleProduct`). Each product in the response is:
+
+1. Parsed via the same `_parse_api_product()` function used by `AudibleProduct`
+2. Wrapped in an `AudibleProduct` instance
+3. Cached under the product's normal `cache_key` (`audible_product_{tld}_{asin}`)
+
+This means a single search call can populate the cache for up to 50 products. Subsequent `AudibleProduct(tld, asin)` constructions for those ASINs will be instant cache hits.
+
+---
+
 ## AudibleProductScraper
 
 Browser-based scraper fallback for Audible product pages. Use when you need `available_regions`, `seo`, or more accurate `is_audible_original` detection.
@@ -478,6 +620,75 @@ Scraper-based classes (`AudibleProductScraper`, `AudibleAuthor`, `AmazonAuthor`)
 ---
 
 ## Usage examples
+
+### AudibleSearch — basic search
+
+```python
+import asyncio
+from scraperator import AudibleSearch, AudibleSearchConfig
+
+AudibleSearch.config = AudibleSearchConfig(cache="local")
+
+async def main():
+    s = AudibleSearch(tld="de", keywords="Der Hobbit Tolkien")
+    await s.scrape()
+    for result in s.products:
+        print(result["asin"], result["title"], result["authors"])
+
+asyncio.run(main())
+```
+
+### AudibleSearch — full hydration (search → AudibleProduct)
+
+```python
+from scraperator import AudibleSearch
+
+s = AudibleSearch(tld="de", keywords="Harry Potter")
+products = await s.scrape_products()
+
+for p in products:
+    print(p.title, p.rating, p.series, p.series_sequence)
+```
+
+### AudibleSearch — batch search
+
+```python
+from scraperator import AudibleSearch, SearchInput
+
+searches = await AudibleSearch.scrape_many([
+    SearchInput("de", "Tolkien Herr der Ringe"),
+    SearchInput("de", "Stephen King Es"),
+    SearchInput("com", "Dune Frank Herbert"),
+])
+
+for s in searches:
+    print(f"{s.keywords}: {len(s.products)} results")
+```
+
+### AudibleSearch — streaming
+
+```python
+from scraperator import AudibleSearch, SearchInput
+
+async for s in AudibleSearch.scrape_stream([
+    SearchInput("de", "Fantasy"),
+    SearchInput("de", "Thriller"),
+    SearchInput("de", "Science Fiction"),
+]):
+    print(f"{s.keywords}: {s.products[0]['title']}")
+```
+
+### AudibleSearch — pipeline into AudibleProduct
+
+```python
+from scraperator import AudibleSearch, AudibleProduct, ProductInput
+
+s = AudibleSearch(tld="com", keywords="Project Hail Mary Andy Weir")
+await s.scrape()
+
+# Feed search results into the existing product pipeline
+products = await AudibleProduct.scrape_many(s.product_inputs)
+```
 
 ### AudibleProduct — single item
 
